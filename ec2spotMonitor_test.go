@@ -3,49 +3,72 @@ package ec2spotmonitor
 import (
 	"fmt"
 	"github.com/titanous/goamz/aws"
-	"github.com/titanous/goamz/ec2"
+	// "github.com/titanous/goamz/ec2"
 	"testing"
 	"time"
 )
 
-func TestUpdate(t *testing.T) {
+func TestAutolUpdate(t *testing.T) {
 
 	auth, err := aws.EnvAuth()
 	if err != nil {
 		panic(err)
 	}
-	m := NewMonitor(auth, aws.EUWest)
-
 	startTime := time.Now().AddDate(0, -3, 0)
 
-	// filter on instances in eu-west-1* = eu-west-1a, eu-west-1b, eu-west-1c..
-	filter := map[string][]string{
-		"availability-zone": []string{"eu-west-1*"},
-	}
+	filter := NewInstanceFilter(startTime, "m1.medium", "Linux/UNIX", "eu-west-1b", nil)
 
-	itemChan, err := m.InitiateFilter(startTime, "m1.medium", "Linux/UNIX", "", filter)
-	if err != nil {
-		fmt.Println(err)
-	}
+	m := NewMonitor(auth, aws.EUWest, filter)
 
-	go ReadItems(itemChan)
+	itemChan := m.StartPriceMonitor(1 * time.Second)
 
-	for {
-		now := startTime.AddDate(0, 0, 1)
-		if now.After(time.Now()) {
-			break
-		}
-		startTime = now
-		time.Sleep(50 * time.Millisecond)
-		m.update(startTime)
-
-	}
-}
-
-func ReadItems(itemChan <-chan ec2.SpotPriceItem) {
 	i := 0
 	for item := range itemChan {
 		i++
 		fmt.Printf("[%3d] New price on channel: %v\n", i, item)
+		if i > 20 {
+			break
+		}
 	}
 }
+
+// func TestAutoUpdate(t *testing.T) {
+
+// 	auth, err := aws.EnvAuth()
+// 	if err != nil {
+// 		panic(err)
+// 	}
+// 	m := NewMonitor(auth, aws.EUWest)
+
+// 	startTime := time.Now().AddDate(0, -3, 0)
+
+// 	itemChan, err := m.InitiateFilter(startTime, "m1.medium", "Linux/UNIX", "eu-west-1b", nil)
+// 	if err != nil {
+// 		fmt.Println(err)
+// 	}
+
+// 	m.LaunchPriceMonitorTicker(1 * time.Second)
+
+// 	i := 0
+// 	for item := range itemChan {
+// 		i++
+// 		// if item.AvailabilityZone == "eu-west-1b" {
+// 		fmt.Printf("[%3d] New price on channel: %v\n", i, item)
+// 		// }
+
+// 		if i > 20 {
+// 			break
+// 		}
+// 	}
+// }
+
+// func ReadItems(itemChan <-chan ec2.SpotPriceItem) {
+// 	i := 0
+// 	for item := range itemChan {
+// 		i++
+// 		if item.AvailabilityZone == "eu-west-1b" {
+// 			fmt.Printf("[%3d] New price on channel: %v\n", i, item)
+// 		}
+
+// 	}
+// }

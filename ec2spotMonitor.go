@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-type Request struct {
+type InstanceFilter struct {
 	// t1.micro | m1.small | m1.medium |
 	// m1.large | m1.xlarge | m3.xlarge |
 	// m3.2xlarge | c1.medium | c1.xlarge |
@@ -19,6 +19,7 @@ type Request struct {
 	// cc2.8xlarge | cg1.4xlarge
 	// http://goo.gl/Nk2JJ0
 	// Required: NO
+	StartTime    time.Time
 	InstanceType string
 	// Linux/UNIX | SUSE Linux | Windows |
 	// Linux/UNIX (Amazon VPC) |
@@ -35,57 +36,57 @@ type Request struct {
 type Monitor struct {
 	m           *RegionMap             // region map
 	s           *ec2.EC2               // ec2 server credentials
-	r           *Request               // query arguments
+	r           *InstanceFilter        // query arguments
 	itemChan    chan ec2.SpotPriceItem // change channel
 	lastUpdated time.Time              // time of last update
+	sync.Mutex
 }
 
 const debug = true
 
-func NewMonitor(auth aws.Auth, region aws.Region) *Monitor {
+func NewMonitor(auth aws.Auth, region aws.Region, request *InstanceFilter) *Monitor {
 
 	monitor := &Monitor{
-		m: &RegionMap{region: make(map[string]*RegionTrace)},
-		s: ec2.New(auth, region),
+		m:           &RegionMap{region: make(map[string]*RegionTrace)},
+		s:           ec2.New(auth, region),
+		r:           request,
+		lastUpdated: request.StartTime,
+		itemChan:    make(chan ec2.SpotPriceItem),
 	}
 
 	return monitor
 }
 
-func (self *Monitor) InitiateFilter(from time.Time, instancetype, productdescription, availabilityzone string, filter map[string][]string) (<-chan ec2.SpotPriceItem, error) {
-
-	// if from.IsZero() {
-	// 	return nil, fmt.Errorf("from: %v is not a valid time.\n", from)
-	// }
+func NewInstanceFilter(from time.Time, instancetype, productdescription, availabilityzone string, filter map[string][]string) *InstanceFilter {
 
 	fil := ec2.NewFilter()
 	for k, v := range filter {
 		fil.Add(k, v...)
 	}
 
-	self.r = &Request{
+	request := &InstanceFilter{
 		AvailabilityZone:   availabilityzone,
 		InstanceType:       instancetype,
 		ProductDescription: productdescription,
 		Filter:             fil,
+		StartTime:          from,
 	}
-	self.lastUpdated = from
 
-	self.itemChan = make(chan ec2.SpotPriceItem)
-
-	// go self.launchPriceMonitor(60 * time.Second)
-
-	return self.itemChan, nil
+	return request
 }
 
-func (self *Monitor) LaunchPriceMonitorTicker(duration time.Duration) {
-	for t := range time.Tick(duration) {
-		err := self.update(t)
-		if err != nil {
-			fmt.Println("Ladida!")
-			fmt.Println(err)
+func (self *Monitor) StartPriceMonitor(duration time.Duration) <-chan ec2.SpotPriceItem {
+
+	go func() {
+		for t := range time.Tick(duration) {
+			err := self.update(t)
+			if err != nil {
+				fmt.Println(err)
+			}
 		}
-	}
+	}()
+
+	return self.itemChan
 }
 
 // us-east-1 -> Region based trace
@@ -95,9 +96,9 @@ type RegionMap struct {
 }
 
 func (self *RegionMap) Add(items []ec2.SpotPriceItem, itemChan chan<- ec2.SpotPriceItem) {
-	for _, item := range items {
-		// for i := len(items) - 1; i >= 0; i-- {
-		// 	item := items[i]
+	// for _, item := range items {
+	for i := len(items) - 1; i >= 0; i-- {
+		item := items[i]
 
 		// zone: region + group: us-east-1 + a = "us-east-1a"
 		zone := item.AvailabilityZone
@@ -122,7 +123,6 @@ func (self *RegionMap) Add(items []ec2.SpotPriceItem, itemChan chan<- ec2.SpotPr
 type RegionTrace struct {
 	region string                    // region name
 	group  map[string]*InstanceTrace // reference for all the instances
-	sync.Mutex
 }
 
 func (self *RegionTrace) Add(group string, item ec2.SpotPriceItem) bool {
@@ -153,10 +153,19 @@ type InstanceTrace struct {
 }
 
 func (self *Monitor) Update() error {
-	return self.update(time.Now())
+
+	go self.update(time.Now())
+	return nil
 }
 
 func (self *Monitor) update(endTime time.Time) error {
+
+	self.Lock()
+	defer self.Unlock()
+
+	if self.r == nil {
+		return fmt.Errorf("Monitor is not configured! Call InitiateMonitor()")
+	}
 
 	var startTime time.Time
 	if self.lastUpdated.IsZero() {
@@ -236,15 +245,10 @@ func (self *InstanceTrace) addPoint(point ec2.PricePoint) bool {
 
 	self.Points = append(self.Points, &point)
 
-	// debug
-	// if debug && self.Group == "a" {
-	// 	fmt.Printf("%s: New instance price: %v\n", self.AvailabilityZone, self.Current)
-	// }
-
 	return true
 }
 
-func (self *InstanceTrace) String() string {
-	return fmt.Sprintf("\n\tLatestUpdate: %v\n\tCurrent: %v\n\tPoints: %v\n",
-		self.Latest.DateTime, self.Current, self.Points)
-}
+// func (self *InstanceTrace) String() string {
+// 	return fmt.Sprintf("\n\tLatestUpdate: %v\n\tCurrent: %v\n\tPoints: %v\n",
+// 		self.Latest.DateTime, self.Current, self.Points)
+// }
