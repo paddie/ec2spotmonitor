@@ -6,6 +6,7 @@ import (
 	"github.com/titanous/goamz/aws"
 	"github.com/titanous/goamz/ec2"
 	// "strings"
+	"log"
 	"sync"
 	"time"
 )
@@ -34,11 +35,13 @@ type InstanceFilter struct {
 }
 
 type Monitor struct {
+	running     bool
 	m           *RegionMap             // region map
 	s           *ec2.EC2               // ec2 server credentials
 	r           *InstanceFilter        // query arguments
 	itemChan    chan ec2.SpotPriceItem // change channel
-	lastUpdated time.Time              // time of last update
+	quitChan    chan bool
+	lastUpdated time.Time // time of last update
 	sync.Mutex
 }
 
@@ -51,7 +54,7 @@ func NewMonitor(auth aws.Auth, region aws.Region, request *InstanceFilter) *Moni
 		s:           ec2.New(auth, region),
 		r:           request,
 		lastUpdated: request.StartTime,
-		itemChan:    make(chan ec2.SpotPriceItem),
+		quitChan:    make(chan bool),
 	}
 
 	return monitor
@@ -72,19 +75,50 @@ func NewInstanceFilter(from time.Time, instancetype, productdescription, availab
 		StartTime:          from,
 	}
 
+	log.Printf("Registered InstanceFilter: %v", request)
+
 	return request
 }
 
-func (self *Monitor) StartPriceMonitor(duration time.Duration) <-chan ec2.SpotPriceItem {
+func (self *Monitor) StopMonitor() {
+	log.Println("Stopping monitor...")
+	// shut down the old monitor ticker
+	self.quitChan <- true
+	// signal listening processes that we're shutting down
+	close(self.itemChan)
+	// delete reference to channel
+	self.itemChan = nil
+	log.Println("Monitor stopped.")
+}
 
+func (self *Monitor) StartPriceMonitor(duration time.Duration) <-chan ec2.SpotPriceItem {
+	// stop monitor if one is already running
+	if self.itemChan != nil {
+		self.StopMonitor()
+	}
+
+	// allocate new item channel
+	self.itemChan = make(chan ec2.SpotPriceItem)
+
+	// launch goroutine that calls update every 'duration'
+	// but also listens for when to shut down
 	go func() {
-		for t := range time.Tick(duration) {
+		log.Printf("Launching SpotPriceMonitor with tick-time: %v", duration)
+		tick := time.Tick(duration)
+		select {
+		case t := <-tick:
 			err := self.update(t)
 			if err != nil {
 				fmt.Println(err)
 			}
+		case _ = <-self.quitChan:
+			log.Println("Recieved Quit Signal, exiting and cleaning up..")
+			// quit sending ticks
+			break
 		}
 	}()
+
+	self.running = true
 
 	return self.itemChan
 }
@@ -154,18 +188,19 @@ type InstanceTrace struct {
 
 func (self *Monitor) Update() error {
 
+	if self.running == false {
+		return fmt.Errorf("Monitor is not running, call StartMonitor(...)")
+	}
+
 	go self.update(time.Now())
+
 	return nil
 }
 
-func (self *Monitor) update(endTime time.Time) error {
+func (self *Monitor) update(endTime time.Time) {
 
 	self.Lock()
 	defer self.Unlock()
-
-	if self.r == nil {
-		return fmt.Errorf("Monitor is not configured! Call InitiateMonitor()")
-	}
 
 	var startTime time.Time
 	if self.lastUpdated.IsZero() {
@@ -193,7 +228,7 @@ func (self *Monitor) update(endTime time.Time) error {
 	// - including the basic filter
 	items, err := self.s.SpotPriceHistory(r, self.r.Filter)
 	if err != nil {
-		return err
+		log.Panic(err)
 	}
 
 	if debug && len(items) > 0 {
@@ -207,8 +242,6 @@ func (self *Monitor) update(endTime time.Time) error {
 	// - this should be replaced by a signalling
 	//   to all listeneres of each instance type
 	// fmt.Println(instances)
-
-	return nil
 }
 
 func (self *InstanceTrace) addPoint(point ec2.PricePoint) bool {
