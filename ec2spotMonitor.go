@@ -107,10 +107,7 @@ func (self *Monitor) StartPriceMonitor(duration time.Duration) <-chan ec2.SpotPr
 		tick := time.Tick(duration)
 		select {
 		case t := <-tick:
-			err := self.update(t)
-			if err != nil {
-				fmt.Println(err)
-			}
+			self.update(t)
 		case _ = <-self.quitChan:
 			log.Println("Recieved Quit Signal, exiting and cleaning up..")
 			// quit sending ticks
