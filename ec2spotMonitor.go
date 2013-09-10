@@ -35,11 +35,10 @@ type InstanceFilter struct {
 }
 
 type Monitor struct {
-	running     bool
-	m           *RegionMap             // region map
-	s           *ec2.EC2               // ec2 server credentials
-	r           *InstanceFilter        // query arguments
-	itemChan    chan ec2.SpotPriceItem // change channel
+	m           *RegionMap               // region map
+	s           *ec2.EC2                 // ec2 server credentials
+	r           *InstanceFilter          // query arguments
+	itemChan    chan []ec2.SpotPriceItem // change channel
 	quitChan    chan bool
 	lastUpdated time.Time // time of last update
 	sync.Mutex
@@ -53,9 +52,7 @@ func NewMonitor(auth aws.Auth, region aws.Region, request *InstanceFilter) *Moni
 		m:           &RegionMap{region: make(map[string]*RegionTrace)},
 		s:           ec2.New(auth, region),
 		r:           request,
-		lastUpdated: request.StartTime,
-		quitChan:    make(chan bool),
-	}
+		lastUpdated: request.StartTime}
 
 	return monitor
 }
@@ -81,43 +78,101 @@ func NewInstanceFilter(from time.Time, instancetype, productdescription, availab
 }
 
 func (self *Monitor) StopMonitor() {
-	log.Println("Stopping monitor...")
-	// shut down the old monitor ticker
-	self.quitChan <- true
+	self.Lock()
+	defer self.Unlock()
+
+	if self.itemChan == nil {
+		return
+	}
+
 	// signal listening processes that we're shutting down
-	close(self.itemChan)
-	// delete reference to channel
-	self.itemChan = nil
-	log.Println("Monitor stopped.")
+	go func() { self.quitChan <- true }()
+	log.Println("Stop signal sent.")
 }
 
-func (self *Monitor) StartPriceMonitor(duration time.Duration) <-chan ec2.SpotPriceItem {
+func (self *Monitor) StartPriceMonitor(duration time.Duration) <-chan []ec2.SpotPriceItem {
 	// stop monitor if one is already running
+	self.Lock()
+	defer self.Unlock()
 	if self.itemChan != nil {
 		self.StopMonitor()
 	}
 
 	// allocate new item channel
-	self.itemChan = make(chan ec2.SpotPriceItem)
+	self.itemChan = make(chan []ec2.SpotPriceItem)
+	self.quitChan = make(chan bool)
 
 	// launch goroutine that calls update every 'duration'
 	// but also listens for when to shut down
 	go func() {
-		log.Printf("Launching SpotPriceMonitor with tick-time: %v", duration)
+		log.Printf("Launching SpotPriceMonitor with tick-time: %v\n", duration)
 		tick := time.Tick(duration)
-		select {
-		case t := <-tick:
-			self.update(t)
-		case _ = <-self.quitChan:
-			log.Println("Recieved Quit Signal, exiting and cleaning up..")
-			// quit sending ticks
-			break
+		for {
+			select {
+			case t := <-tick:
+				log.Println("Updating monitor..")
+				items, err := self.update(t)
+				if err != nil {
+					log.Println(err)
+				}
+				// only send/block if there are items to send
+				if len(items) > 0 {
+					self.itemChan <- items
+				}
+			case _ = <-self.quitChan:
+				log.Println("Recieved quit-signal, exiting and cleaning up..")
+				close(self.itemChan)
+				// delete reference to channel
+				self.itemChan = nil
+				log.Println("Monitor stopped.")
+				break
+			}
 		}
+
 	}()
-
-	self.running = true
-
 	return self.itemChan
+}
+
+func (self *Monitor) update(endTime time.Time) ([]ec2.SpotPriceItem, error) {
+
+	self.Lock()
+	defer self.Unlock()
+
+	var startTime time.Time
+	if self.lastUpdated.IsZero() {
+		// make starttime to be 2 months ago
+		if debug {
+			fmt.Println("resetting startTime")
+		}
+		startTime = time.Now().AddDate(0, -2, 0)
+	} else {
+		// set starttime to be the time the last update was run
+		startTime = self.lastUpdated
+	}
+
+	r := &ec2.SpotPriceRequest{
+		StartTime:          startTime,
+		EndTime:            endTime,
+		AvailabilityZone:   self.r.AvailabilityZone,
+		InstanceType:       self.r.InstanceType,
+		ProductDescription: self.r.ProductDescription,
+	}
+
+	// get upated list of spot price changes for that time
+	// - including the basic filter
+	items, err := self.s.SpotPriceHistory(r, self.r.Filter)
+	if err != nil {
+		return nil, err
+	}
+
+	// update the lastupdated time upon completion
+	self.lastUpdated = endTime
+
+	if len(items) == 0 {
+		return []ec2.SpotPriceItem{}, nil
+	}
+
+	return self.m.updateItems(items), nil
 }
 
 // us-east-1 -> Region based trace
@@ -126,8 +181,12 @@ type RegionMap struct {
 	sync.Mutex
 }
 
-func (self *RegionMap) Add(items []ec2.SpotPriceItem, itemChan chan<- ec2.SpotPriceItem) {
-	// for _, item := range items {
+func (self *RegionMap) updateItems(items []ec2.SpotPriceItem) []ec2.SpotPriceItem {
+
+	updatedItems := make([]ec2.SpotPriceItem, 0)
+
+	// iterate through the history in reverse
+	// alternative: for _, item := range items {
 	for i := len(items) - 1; i >= 0; i-- {
 		item := items[i]
 
@@ -144,10 +203,12 @@ func (self *RegionMap) Add(items []ec2.SpotPriceItem, itemChan chan<- ec2.SpotPr
 			}
 		}
 
-		if self.region[region].Add(group, item) {
-			itemChan <- item
+		if self.region[region].AddToGroup(group, item) {
+			updatedItems = append(updatedItems, item)
 		}
 	}
+
+	return updatedItems
 }
 
 // group = us-east-1a => a --> actual instance traces
@@ -156,7 +217,7 @@ type RegionTrace struct {
 	group  map[string]*InstanceTrace // reference for all the instances
 }
 
-func (self *RegionTrace) Add(group string, item ec2.SpotPriceItem) bool {
+func (self *RegionTrace) AddToGroup(group string, item ec2.SpotPriceItem) bool {
 	if _, ok := self.group[group]; !ok {
 		// allocate for new instance
 		self.group[group] = &InstanceTrace{
@@ -183,63 +244,12 @@ type InstanceTrace struct {
 	Points             []*ec2.PricePoint
 }
 
-func (self *Monitor) Update() error {
-
-	if self.running == false {
-		return fmt.Errorf("Monitor is not running, call StartMonitor(...)")
-	}
-
-	go self.update(time.Now())
-
-	return nil
-}
-
-func (self *Monitor) update(endTime time.Time) {
-
-	self.Lock()
-	defer self.Unlock()
-
-	var startTime time.Time
-	if self.lastUpdated.IsZero() {
-		// make starttime to be 20 months ago
-		// - maybe, maybe not return the complete trace of all the instances
-		//   for those particular months
-		if debug {
-			fmt.Println("resetting startTime")
-		}
-		startTime = time.Now().AddDate(0, -2, 0)
-	} else {
-		// set starttime to be the time the last update was run
-		startTime = self.lastUpdated
-	}
-
-	r := &ec2.SpotPriceRequest{
-		StartTime:          startTime,
-		EndTime:            endTime,
-		AvailabilityZone:   self.r.AvailabilityZone,
-		InstanceType:       self.r.InstanceType,
-		ProductDescription: self.r.ProductDescription,
-	}
-
-	// get upated list of spot price changes for that time
-	// - including the basic filter
-	items, err := self.s.SpotPriceHistory(r, self.r.Filter)
-	if err != nil {
-		log.Panic(err)
-	}
-
-	if debug && len(items) > 0 {
-		// fmt.Printf("Update: %d new pricepoints (%v -> %v)\n", len(items), startTime, endTime)
-	}
-	// update the lastupdated time upon completion
-	self.lastUpdated = endTime
-
-	self.m.Add(items, self.itemChan)
-	// print out the result
-	// - this should be replaced by a signalling
-	//   to all listeneres of each instance type
-	// fmt.Println(instances)
-}
+// func (self *Monitor) Update() []ec2.SpotPriceItem {
+// 	go func() {
+// 		items := self.update(time.Now())
+// 		self.itemChan <- items
+// 	}()
+// }
 
 func (self *InstanceTrace) addPoint(point ec2.PricePoint) bool {
 
