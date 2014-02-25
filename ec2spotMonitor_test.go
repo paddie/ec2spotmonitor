@@ -14,61 +14,85 @@ func TestAutolUpdate(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	startTime := time.Now().AddDate(0, -3, 0)
+	startTime := time.Now().AddDate(0, 0, -7)
 
-	filter := NewInstanceFilter(startTime, "m1.medium", "Linux/UNIX", "eu-west-1b", nil)
+	filter := NewInstanceFilter("m1.medium", "Linux/UNIX", "eu-west-1b", nil)
 
 	m := NewMonitor(auth, aws.EUWest, filter)
 
-	itemChan := m.StartPriceMonitor(1 * time.Second)
+	itemChan := m.StartPriceMonitor(startTime, 1*time.Second)
 
 	i := 0
-	for item := range itemChan {
-		i++
-		fmt.Printf("[%3d] New price on channel: %v\n", i, item)
-		if i > 20 {
-			break
+
+	quit := time.Tick(5 * time.Second)
+
+	for {
+		select {
+		case items := <-itemChan:
+			for _, item := range items {
+				i++
+				fmt.Printf("[%2d] New price on channel: %v\n", i, item)
+			}
+		case _ = <-quit:
+			fmt.Println("Received 'quit' signal. Exiting test")
+			return
 		}
 	}
 }
 
-// func TestAutoUpdate(t *testing.T) {
+func TestUpdate(t *testing.T) {
+	auth, err := aws.EnvAuth()
+	if err != nil {
+		panic(err)
+	}
 
-// 	auth, err := aws.EnvAuth()
-// 	if err != nil {
-// 		panic(err)
-// 	}
-// 	m := NewMonitor(auth, aws.EUWest)
+	filter := NewInstanceFilter("m1.medium", "Linux/UNIX", "eu-west-1b", nil)
 
-// 	startTime := time.Now().AddDate(0, -3, 0)
+	m := NewMonitor(auth, aws.EUWest, filter)
 
-// 	itemChan, err := m.InitiateFilter(startTime, "m1.medium", "Linux/UNIX", "eu-west-1b", nil)
-// 	if err != nil {
-// 		fmt.Println(err)
-// 	}
+	i := 0
+	items := m.update(time.Now())
+	for _, item := range items {
+		i++
+		fmt.Printf("[%2d] New price on channel: %v\n", i, item)
+	}
+}
 
-// 	m.LaunchPriceMonitorTicker(1 * time.Second)
+// Test if / how the updater handles the updates
+func TestIterativeUpdate(t *testing.T) {
 
-// 	i := 0
-// 	for item := range itemChan {
-// 		i++
-// 		// if item.AvailabilityZone == "eu-west-1b" {
-// 		fmt.Printf("[%3d] New price on channel: %v\n", i, item)
-// 		// }
+	auth, err := aws.EnvAuth()
+	if err != nil {
+		panic(err)
+	}
 
-// 		if i > 20 {
-// 			break
-// 		}
-// 	}
-// }
+	filter := NewInstanceFilter("m1.medium", "Linux/UNIX", "eu-west-1b", nil)
 
-// func ReadItems(itemChan <-chan ec2.SpotPriceItem) {
-// 	i := 0
-// 	for item := range itemChan {
-// 		i++
-// 		if item.AvailabilityZone == "eu-west-1b" {
-// 			fmt.Printf("[%3d] New price on channel: %v\n", i, item)
-// 		}
+	m := NewMonitor(auth, aws.EUWest, filter)
 
-// 	}
-// }
+	startTime := time.Now().AddDate(0, -3, 0)
+
+	m.startTime = startTime
+
+	endTime := startTime.AddDate(0, 0, 15)
+
+	now := time.Now()
+	i := 0
+	flag := false
+	for {
+		if flag {
+			break
+		}
+		if endTime.After(now) {
+			endTime = now
+			flag = true
+		}
+
+		items := m.update(endTime)
+		for _, item := range items {
+			i++
+			fmt.Printf("[%3d] New price on channel: %v\n", i, item)
+		}
+		endTime = endTime.AddDate(0, 0, 15)
+	}
+}

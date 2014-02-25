@@ -2,181 +2,74 @@ package ec2spotmonitor
 
 import (
 	// "bytes"
-	"fmt"
+	// "fmt"
 	"github.com/titanous/goamz/aws"
 	"github.com/titanous/goamz/ec2"
 	// "strings"
+	"log"
 	"sync"
 	"time"
 )
 
-type InstanceFilter struct {
-	// t1.micro | m1.small | m1.medium |
-	// m1.large | m1.xlarge | m3.xlarge |
-	// m3.2xlarge | c1.medium | c1.xlarge |
-	// m2.xlarge | m2.2xlarge | m2.4xlarge |
-	// cr1.8xlarge | cc1.4xlarge |
-	// cc2.8xlarge | cg1.4xlarge
-	// http://goo.gl/Nk2JJ0
-	// Required: NO
-	StartTime    time.Time
-	InstanceType string
-	// Linux/UNIX | SUSE Linux | Windows |
-	// Linux/UNIX (Amazon VPC) |
-	// SUSE Linux (Amazon VPC) |
-	// Windows (Amazon VPC)
-	// Required: NO
-	ProductDescription string
-	// us-east-1a, etc.
-	// Required: NO
-	AvailabilityZone string
-	Filter           *ec2.Filter
-}
+func (s *Monitor) compareUpdates(items []ec2.SpotPriceItem) []ec2.SpotPriceItem {
 
-type Monitor struct {
-	m           *RegionMap             // region map
-	s           *ec2.EC2               // ec2 server credentials
-	r           *InstanceFilter        // query arguments
-	itemChan    chan ec2.SpotPriceItem // change channel
-	lastUpdated time.Time              // time of last update
-	sync.Mutex
-}
+	updatedItems := []ec2.SpotPriceItem{}
 
-const debug = true
-
-func NewMonitor(auth aws.Auth, region aws.Region, request *InstanceFilter) *Monitor {
-
-	monitor := &Monitor{
-		m:           &RegionMap{region: make(map[string]*RegionTrace)},
-		s:           ec2.New(auth, region),
-		r:           request,
-		lastUpdated: request.StartTime,
-		itemChan:    make(chan ec2.SpotPriceItem),
-	}
-
-	return monitor
-}
-
-func NewInstanceFilter(from time.Time, instancetype, productdescription, availabilityzone string, filter map[string][]string) *InstanceFilter {
-
-	fil := ec2.NewFilter()
-	for k, v := range filter {
-		fil.Add(k, v...)
-	}
-
-	request := &InstanceFilter{
-		AvailabilityZone:   availabilityzone,
-		InstanceType:       instancetype,
-		ProductDescription: productdescription,
-		Filter:             fil,
-		StartTime:          from,
-	}
-
-	return request
-}
-
-func (self *Monitor) StartPriceMonitor(duration time.Duration) <-chan ec2.SpotPriceItem {
-
-	go func() {
-		for t := range time.Tick(duration) {
-			err := self.update(t)
-			if err != nil {
-				fmt.Println(err)
-			}
-		}
-	}()
-
-	return self.itemChan
-}
-
-// us-east-1 -> Region based trace
-type RegionMap struct {
-	region map[string]*RegionTrace
-	sync.Mutex
-}
-
-func (self *RegionMap) Add(items []ec2.SpotPriceItem, itemChan chan<- ec2.SpotPriceItem) {
 	// for _, item := range items {
 	for i := len(items) - 1; i >= 0; i-- {
 		item := items[i]
 
-		// zone: region + group: us-east-1 + a = "us-east-1a"
-		zone := item.AvailabilityZone
-		region := zone[0 : len(zone)-1]
-		group := zone[len(zone)-1 : len(zone)]
-
-		if _, ok := self.region[region]; !ok {
-			// allocate for new instance
-			self.region[region] = &RegionTrace{
-				region: region,
-				group:  make(map[string]*InstanceTrace),
+		// us-east-1a => us-east-1
+		region := item.AvailabilityZone[0 : len(item.AvailabilityZone)-1]
+		if _, ok := s.m[region]; !ok {
+			log.Printf("Adding region: %s", region)
+			s.m[region] = &RegionTrace{
+				region:        region,
+				instanceTypes: make(map[string]*InstanceTrace),
 			}
 		}
-
-		if self.region[region].Add(group, item) {
-			itemChan <- item
+		if s.m[region].Add(item) {
+			updatedItems = append(updatedItems, item)
 		}
 	}
+	return updatedItems
 }
 
-// group = us-east-1a => a --> actual instance traces
-type RegionTrace struct {
-	region string                    // region name
-	group  map[string]*InstanceTrace // reference for all the instances
+func (self *Monitor) Update() []ec2.SpotPriceItem {
+	return self.update(time.Now())
 }
 
-func (self *RegionTrace) Add(group string, item ec2.SpotPriceItem) bool {
-	if _, ok := self.group[group]; !ok {
-		// allocate for new instance
-		self.group[group] = &InstanceTrace{
-			Group:              group,
-			AvailabilityZone:   item.AvailabilityZone,
-			ProductDescription: item.ProductDescription,
-			InstanceType:       item.ProductDescription,
-		}
-	}
-
-	return self.group[group].addPoint(ec2.PricePoint{
-		DateTime: item.Timestamp,
-		Price:    item.SpotPrice,
-	})
-}
-
-type InstanceTrace struct {
-	Group              string          //
-	AvailabilityZone   string          // complete zone
-	InstanceType       string          //"m3.xlarge"
-	ProductDescription string          //"Linux/UNIX"
-	Current            *ec2.PricePoint // the last pricepoint to change the price
-	Latest             *ec2.PricePoint // the latest pricepoint (mainly for the time)
-	Points             []*ec2.PricePoint
-}
-
-func (self *Monitor) Update() error {
-
-	go self.update(time.Now())
-	return nil
-}
-
-func (self *Monitor) update(endTime time.Time) error {
+func (self *Monitor) Reset(startTime time.Time) error {
 
 	self.Lock()
 	defer self.Unlock()
 
-	if self.r == nil {
-		return fmt.Errorf("Monitor is not configured! Call InitiateMonitor()")
+	self.startTime = startTime
+	self.lastUpdated = time.Time{}
+
+	self.m = make(map[string]*RegionTrace)
+
+	return nil
+}
+
+func (self *Monitor) update(from, to time.Time) []ec2.SpotPriceItem {
+
+	// if endtime is invalid/zero
+	// replace by current time
+	if endTime.IsZero() {
+		endTime = time.Now()
 	}
 
 	var startTime time.Time
+	// if lastupdated == zero => first time we run update
 	if self.lastUpdated.IsZero() {
-		// make starttime to be 20 months ago
-		// - maybe, maybe not return the complete trace of all the instances
-		//   for those particular months
-		if debug {
-			fmt.Println("resetting startTime")
+		// when called from test, startTime is not set
+		if self.startTime.IsZero() {
+			self.startTime = endTime.AddDate(0, -2, 0)
 		}
-		startTime = time.Now().AddDate(0, -2, 0)
+		startTime = self.startTime
 	} else {
+		// not the first time we run update
 		// set starttime to be the time the last update was run
 		startTime = self.lastUpdated
 	}
@@ -193,62 +86,12 @@ func (self *Monitor) update(endTime time.Time) error {
 	// - including the basic filter
 	items, err := self.s.SpotPriceHistory(r, self.r.Filter)
 	if err != nil {
-		return err
+		log.Println(err)
+		return []ec2.SpotPriceItem{}
 	}
 
-	if debug && len(items) > 0 {
-		// fmt.Printf("Update: %d new pricepoints (%v -> %v)\n", len(items), startTime, endTime)
-	}
 	// update the lastupdated time upon completion
 	self.lastUpdated = endTime
 
-	self.m.Add(items, self.itemChan)
-	// print out the result
-	// - this should be replaced by a signalling
-	//   to all listeneres of each instance type
-	// fmt.Println(instances)
-
-	return nil
+	return self.compareUpdates(items)
 }
-
-func (self *InstanceTrace) addPoint(point ec2.PricePoint) bool {
-
-	// self.Latest contains the most recent pricepoint
-	// associated with this configuration
-	// - meaning: we update everytime a price point
-	//   with a more recent date is encountered.
-	if self.Latest == nil {
-		self.Latest = &point
-	} else {
-		// if the date received is before or equal
-		// to the latest date collected, ignore
-		if self.Latest.DateTime.After(point.DateTime) {
-			return false
-		}
-		self.Latest = &point
-	}
-
-	// self.current contains the current price and the date
-	// when it was updated - only update when/if the price
-	// changes
-	if self.Current == nil {
-		self.Current = &point
-	} else {
-		if point.Price == self.Current.Price {
-			return false
-		}
-	}
-
-	// The price has changed, add to list of pricepoints,
-	// and update current price
-	self.Current = &point
-
-	self.Points = append(self.Points, &point)
-
-	return true
-}
-
-// func (self *InstanceTrace) String() string {
-// 	return fmt.Sprintf("\n\tLatestUpdate: %v\n\tCurrent: %v\n\tPoints: %v\n",
-// 		self.Latest.DateTime, self.Current, self.Points)
-// }
