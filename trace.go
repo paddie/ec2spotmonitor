@@ -7,29 +7,6 @@ import (
 	"time"
 )
 
-// type RegionTrace struct {
-// 	region        string                    // region name
-// 	instanceTypes map[string]*InstanceTrace // reference for all the instances
-// }
-
-// func (self *RegionTrace) Add(item *ec2.SpotPriceItem) bool {
-// 	key := item.Key()
-// 	if _, ok := self.instanceTypes[key]; !ok {
-// 		// allocate for new instance
-// 		self.instanceTypes[key] = &InstanceTrace{
-// 			// Key:                key,
-// 			AvailabilityZone:   item.AvailabilityZone,
-// 			ProductDescription: item.ProductDescription,
-// 			InstanceType:       item.InstanceType,
-// 		}
-// 	}
-
-// 	return self.instanceTypes[key].addPoint(ec2.PricePoint{
-// 		DateTime: item.Timestamp,
-// 		Price:    item.SpotPrice,
-// 	})
-// }
-
 type InstanceTrace struct {
 	Key                string
 	AvailabilityZone   string      // complete zone

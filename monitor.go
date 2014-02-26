@@ -8,45 +8,39 @@ import (
 )
 
 type Monitor struct {
-	trace       *InstanceTrace
-	s           *ec2.EC2 // ec2 server credentials
-	r           *Filter  // query arguments
-	active      bool
+	s           *ec2.EC2  // ec2 server credentials
+	r           *Filter   // query arguments
 	lastUpdated time.Time // time of last update
-	startTime   time.Time // oldest price point
-	// Channels for the MonitorSelect
-	traceChan chan *Trace // Response channel
-	quitChan  chan bool   // channel for quiting an active price monitor
+
+	TraceChan chan *Trace    // New pricepoints are sent on this channel
+	quitChan  chan chan bool // for shutting down
 	ticker    *time.Ticker
-	horizon   chan *HorizonRequest // channel for getting the horizon
-	lock      chan chan bool       // channel used to lock the Monitor while some value is accessed
-	current   *ec2.SpotPriceItem   // last value that was changed the price - only updated on tick
-	key       string               // key of the monitor
+	current   *ec2.SpotPriceItem // last value that was changed the
 }
 
-func NewMonitor(auth aws.Auth, region aws.Region, filter *Filter, interval time.Duration) (*Monitor, <-chan *Trace, error) {
+func NewMonitor(auth aws.Auth, region aws.Region, filter *Filter, interval time.Duration) (*Monitor, error) {
 	if interval < time.Second {
-		return nil, nil, fmt.Errorf("Monitor: Too small update interval (1 > %d)", interval)
+		return nil, fmt.Errorf("Monitor: Too small update interval (1 > %d)", interval)
 	}
 
 	if !filter.IsValid() {
-		return nil, nil, fmt.Errorf("Monitor: Non-specific filter %v", *filter)
+		return nil, fmt.Errorf("Monitor: Non-specific filter %v", *filter)
 	}
 
 	m := &Monitor{
-		s:         ec2.New(auth, region),
-		r:         filter,
-		quitChan:  make(chan bool),
-		lock:      make(chan chan bool),
-		traceChan: make(chan *Trace),
-		horizon:   make(chan *HorizonRequest),
-		ticker:    time.NewTicker(interval),
-		active:    true,
+		s:        ec2.New(auth, region),
+		r:        filter,
+		quitChan: make(chan chan bool),
+		// lock:      make(chan chan bool),
+		TraceChan: make(chan *Trace),
+		// horizon:   make(chan *HorizonRequest),
+		ticker: time.NewTicker(interval),
+		// active: true,
 	}
 
 	go m.MonitorSelect()
 
-	return m, m.traceChan, nil
+	return m, nil
 }
 
 type Trace struct {
@@ -56,63 +50,32 @@ type Trace struct {
 	err            error
 }
 
-type HorizonRequest struct {
-	From time.Time
-	Resp chan *Trace
-}
+// type HorizonRequest struct {
+// 	From time.Time
+// 	Resp chan *Trace
+// }
 
 func (m *Monitor) Quit() {
 	fmt.Println("Sending exit signal to monitor")
-	m.quitChan <- true
-}
+	resp := make(chan bool)
+	m.quitChan <- resp
 
-func (m *Monitor) Horizon(from time.Time) ([]*ec2.SpotPriceItem, error) {
-	resp := make(chan *Trace)
-
-	if m.horizon == nil {
-		return nil, fmt.Errorf("Monitor: Not active. Call StartMonitor()..")
-	}
-
-	m.horizon <- &HorizonRequest{
-		From: from,
-		Resp: resp,
-	}
-	// get results
-	t := <-resp
-	// return the errors
-	return t.Items, t.err
+	<-resp
 }
 
 func (m *Monitor) MonitorSelect() {
 	for {
 		select {
-		case _ = <-m.quitChan:
+		case ch := <-m.quitChan:
 			fmt.Println("Monitor: Exiting")
-			m.active = false
 			m.ticker.Stop()
-			close(m.traceChan)
-			break
+			// close(m.TraceChan)
+			// close(m.quitChan)
+			ch <- true
+			return
 		// used to lock the monitor object
-		case resp := <-m.lock:
-			resp <- true
-		case req := <-m.horizon:
-			// to is the current time
-			now := time.Now()
-			// init the response trace
-			trace := &Trace{
-				From: req.From,
-				To:   now,
-			}
-			// retrieve interformation
-			items, err := m.retrieveInterval(req.From, now)
-			// simply forwards any errors or results
-			trace.err = err
-			trace.Items = items
-			trace.ProcessingTime = time.Now().Sub(now)
-			// return result asynchronously
-			go func() {
-				req.Resp <- trace
-			}()
+		// case resp := <-m.lock:
+		// 	resp <- true
 		case to := <-m.ticker.C:
 			// A tick was received from the ticker
 			// record current time to measure processing time
@@ -145,12 +108,11 @@ func (m *Monitor) MonitorSelect() {
 			// note the processing time
 			trace.ProcessingTime = time.Now().Sub(now)
 			// return result asynchronously
-			go func() {
-				m.traceChan <- trace
-			}()
+			// go func() {
+			m.TraceChan <- trace
+			// }()
 		}
 	}
-	fmt.Println("Monitor: Off")
 }
 
 func (m *Monitor) retrieveInterval(from, to time.Time) ([]*ec2.SpotPriceItem, error) {
@@ -192,21 +154,21 @@ func (m *Monitor) getItems(from, to time.Time) ([]*ec2.SpotPriceItem, error) {
 	return items, nil
 }
 
-func (m *Monitor) block() chan bool {
-	resp := make(chan bool)
-	m.lock <- resp
+// func (m *Monitor) block() chan bool {
+// 	resp := make(chan bool)
+// 	m.lock <- resp
 
-	return resp
-}
+// 	return resp
+// }
 
-// Blocking
-func (m *Monitor) IsActive() bool {
-	// lock the monitor
-	resp := m.block()
-	// retrieve state
-	state := m.active
-	// unlock monitor
-	_ = <-resp
+// // Blocking
+// func (m *Monitor) IsActive() bool {
+// 	// lock the monitor
+// 	resp := m.block()
+// 	// retrieve state
+// 	state := m.active
+// 	// unlock monitor
+// 	_ = <-resp
 
-	return state
-}
+// 	return state
+// }

@@ -25,20 +25,17 @@ func TestAutolUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, itemChan, err := NewMonitor(auth, aws.EUWest, filter, time.Second*2)
+	m, err := NewMonitor(auth, aws.EUWest, filter, time.Second*2)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// run for 10 seconds
 	quit := time.NewTimer(time.Second * 10)
-	ticker := time.NewTicker(time.Second)
+	// tick := time.NewTicker(time.Second)
 
-	for {
-		select {
-		case t := <-ticker.C:
-			fmt.Printf("tick %v\n", t)
-		case trace := <-itemChan:
+	go func() {
+		for trace := range m.TraceChan {
 			if trace.err != nil {
 				t.Fatal(trace.err)
 			}
@@ -47,17 +44,14 @@ func TestAutolUpdate(t *testing.T) {
 				continue
 			}
 			for _, item := range trace.Items {
-				fmt.Printf("Price change: %#v", item)
+				fmt.Printf("Price change: %#v\n", *item)
 			}
-		case _ = <-quit.C:
-			quit.Stop()
-			fmt.Println("Exit signal")
-			ticker.Stop()
-			// m.Quit()
-			time.Sleep(time.Second * 2)
-			return
 		}
-	}
+		fmt.Println("exiting test")
+	}()
+	<-quit.C
+	quit.Stop()
+	m.Quit()
 }
 
 // func TestUpdate(t *testing.T) {
