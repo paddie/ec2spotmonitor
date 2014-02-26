@@ -2,35 +2,32 @@ package ec2spotmonitor
 
 import (
 	"fmt"
-	"github.com/titanous/goamz/aws"
+	// "github.com/titanous/goamz/aws"
 	"github.com/titanous/goamz/ec2"
 	"time"
 )
 
 type Monitor struct {
-	s           *ec2.EC2  // ec2 server credentials
-	r           *Filter   // query arguments
-	lastUpdated time.Time // time of last update
-
-	TraceChan chan *Trace    // New pricepoints are sent on this channel
-	quitChan  chan chan bool // for shutting down
-	ticker    *time.Ticker
-	current   *ec2.SpotPriceItem // last value that was changed the
+	s           *ec2.EC2 // ec2 server credentials
+	request     *ec2.SpotPriceRequest
+	lastUpdated time.Time   // time of last update
+	TraceChan   chan *Trace // New pricepoints are sent on this channel
+	// quitChan    chan chan bool // for shutting down
+	quitChan chan bool
+	ticker   *time.Ticker
+	current  *ec2.SpotPriceItem // last value that was changed the
 }
 
-func NewMonitor(auth aws.Auth, region aws.Region, filter *Filter, interval time.Duration) (*Monitor, error) {
+func (s *EC2InstanceDesc) NewMonitor(interval time.Duration) (*Monitor, error) {
+
 	if interval < time.Second {
 		return nil, fmt.Errorf("Monitor: Too small update interval (1 > %d)", interval)
 	}
 
-	if !filter.IsValid() {
-		return nil, fmt.Errorf("Monitor: Non-specific filter %v", *filter)
-	}
-
 	m := &Monitor{
-		s:        ec2.New(auth, region),
-		r:        filter,
-		quitChan: make(chan chan bool),
+		s:        s.ec2,
+		request:  s.request,
+		quitChan: make(chan bool),
 		// lock:      make(chan chan bool),
 		TraceChan: make(chan *Trace),
 		// horizon:   make(chan *HorizonRequest),
@@ -50,28 +47,34 @@ type Trace struct {
 	err            error
 }
 
-// type HorizonRequest struct {
-// 	From time.Time
-// 	Resp chan *Trace
-// }
+func (t *Trace) Error() string {
+	if t.err == nil {
+		return ""
+	}
+	return t.err.Error()
+}
 
+// Blocking Shutdown of the Monitor
 func (m *Monitor) Quit() {
-	fmt.Println("Sending exit signal to monitor")
-	resp := make(chan bool)
-	m.quitChan <- resp
+	if m == nil {
+		return
+	}
+	m.quitChan <- true
 
-	<-resp
+	<-m.quitChan
 }
 
 func (m *Monitor) MonitorSelect() {
 	for {
 		select {
-		case ch := <-m.quitChan:
-			fmt.Println("Monitor: Exiting")
+		case <-m.quitChan:
+			// stop ticker
 			m.ticker.Stop()
-			// close(m.TraceChan)
-			// close(m.quitChan)
-			ch <- true
+			// close trace channel
+			close(m.TraceChan)
+			// send signal that cleanup is complete
+			fmt.Println("Monitor exit")
+			m.quitChan <- true
 			return
 		// used to lock the monitor object
 		// case resp := <-m.lock:
@@ -90,85 +93,33 @@ func (m *Monitor) MonitorSelect() {
 				From: m.lastUpdated,
 				To:   to,
 			}
+
+			// copy the request object
+			r := *m.request
+			r.StartTime = m.lastUpdated
+			r.EndTime = to
+
 			// retrieve interformation
-			items, err := m.retrieveInterval(m.lastUpdated, to)
+			items, err := getSpotPriceItems(m.s, &r)
 			if err != nil {
 				trace.err = err
-			} else {
-				for _, item := range items {
-					if m.current == nil || (item.SpotPrice != m.current.SpotPrice &&
-						!item.Timestamp.After(m.current.Timestamp)) {
-						m.current = item
-						trace.Items = append(trace.Items, item)
-					}
-				}
-				// no error-changes the lastUpdated time
-				m.lastUpdated = to
 			}
+			// Update lastUpdated on a successfull
+			// describehistory
+			m.lastUpdated = to
+
+			for _, item := range items {
+				if m.current == nil || (item.SpotPrice != m.current.SpotPrice &&
+					!item.Timestamp.After(m.current.Timestamp)) {
+					m.current = item
+					trace.Items = append(trace.Items, item)
+				}
+			}
+
 			// note the processing time
 			trace.ProcessingTime = time.Now().Sub(now)
 			// return result asynchronously
-			// go func() {
 			m.TraceChan <- trace
-			// }()
 		}
 	}
 }
-
-func (m *Monitor) retrieveInterval(from, to time.Time) ([]*ec2.SpotPriceItem, error) {
-
-	if from.Equal(to) {
-		return nil, fmt.Errorf("retrieveInterval: from time %v == %v to time", from, to)
-	}
-
-	if from.IsZero() || to.IsZero() {
-		return nil, fmt.Errorf("retrieveInterval: from '%v' or to %v is zero", from, to)
-	}
-
-	if from.After(to) {
-		fmt.Errorf("from-date '%v' is before to-date '%v'", from, to)
-	}
-
-	return m.getItems(from, to)
-}
-
-func (m *Monitor) getItems(from, to time.Time) ([]*ec2.SpotPriceItem, error) {
-	r := &ec2.SpotPriceRequest{
-		StartTime:          from,
-		EndTime:            to,
-		AvailabilityZone:   m.r.AvailabilityZone,
-		InstanceType:       m.r.InstanceType,
-		ProductDescription: m.r.ProductDescription,
-	}
-
-	// get upated list of spot price changes for that time
-	// - including the basic filter
-	items, err := m.s.SpotPriceHistory(r, m.r.Filter)
-	if err != nil {
-		return nil, err
-	}
-
-	// update the lastupdated time upon completion
-	// self.lastUpdated = endTime
-
-	return items, nil
-}
-
-// func (m *Monitor) block() chan bool {
-// 	resp := make(chan bool)
-// 	m.lock <- resp
-
-// 	return resp
-// }
-
-// // Blocking
-// func (m *Monitor) IsActive() bool {
-// 	// lock the monitor
-// 	resp := m.block()
-// 	// retrieve state
-// 	state := m.active
-// 	// unlock monitor
-// 	_ = <-resp
-
-// 	return state
-// }

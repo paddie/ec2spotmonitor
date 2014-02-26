@@ -56,20 +56,3 @@ func (f *Filter) IsValid() bool {
 	}
 	return true
 }
-
-// func oldInstanceFilter(instancetype, productdescription, availabilityzone string, filter map[string][]string) *InstanceFilter {
-
-// 	fil := ec2.NewFilter()
-// 	for k, v := range filter {
-// 		fil.Add(k, v...)
-// 	}
-
-// 	request := &InstanceFilter{
-// 		AvailabilityZone:   availabilityzone,
-// 		InstanceType:       instancetype,
-// 		ProductDescription: productdescription,
-// 		Filter:             fil,
-// 	}
-
-// 	return request
-// }

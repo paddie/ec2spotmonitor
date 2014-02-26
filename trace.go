@@ -1,7 +1,6 @@
 package ec2spotmonitor
 
 import (
-	// "errors"
 	"fmt"
 	"github.com/titanous/goamz/ec2"
 	"time"
@@ -18,6 +17,7 @@ type InstanceTrace struct {
 }
 
 type PricePoint struct {
+	Key   string
 	Date  time.Time
 	Price float64
 }
