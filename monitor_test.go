@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"github.com/titanous/goamz/aws"
 	"github.com/titanous/goamz/ec2"
-	"runtime"
+	// "runtime"
 	"testing"
 	"time"
 )
@@ -21,33 +21,23 @@ func TestMonitorInvalidDesc(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m, err := desc.NewMonitor(time.Second * 1)
+	m, err := d.NewMonitor(time.Second * 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// run for 10 seconds
-	quit := time.After(time.Second * 10)
-	// tick := time.NewTicker(time.Second)
-
+	quit := make(chan bool)
 	go func() {
 		for trace := range m.TraceChan {
-			if trace.err != nil {
-				t.Fatal(trace.err)
+			if trace.err == nil {
+				t.Error("Monitor didn't fail on invalid description")
 			}
-			if len(trace.Items) == 0 {
-				fmt.Println("No results..")
-				continue
-			}
-			for _, item := range trace.Items {
-				fmt.Printf("Price change: %#v\n", *item)
-			}
+			fmt.Println(trace.err.Error())
+			quit <- true
 		}
-		fmt.Println("exiting test")
 	}()
 	<-quit
 	m.Quit()
-
 }
 
 func TestMonitor(t *testing.T) {

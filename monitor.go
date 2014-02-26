@@ -73,7 +73,6 @@ func (m *Monitor) MonitorSelect() {
 			// close trace channel
 			close(m.TraceChan)
 			// send signal that cleanup is complete
-			fmt.Println("Monitor exit")
 			m.quitChan <- true
 			return
 		// used to lock the monitor object
@@ -101,16 +100,19 @@ func (m *Monitor) MonitorSelect() {
 
 			// retrieve interformation
 			items, err := getSpotPriceItems(m.s, &r)
-			if err != nil {
-				trace.err = err
-			}
+			// add error, even if nil
+			trace.err = err
+
 			// Update lastUpdated on a successfull
 			// describehistory
 			m.lastUpdated = to
 
+			// only send item if it is newer AND different
 			for _, item := range items {
-				if m.current == nil || (item.SpotPrice != m.current.SpotPrice &&
-					!item.Timestamp.After(m.current.Timestamp)) {
+				if m.current == nil ||
+					(item.SpotPrice != m.current.SpotPrice &&
+						!item.Timestamp.After(m.current.Timestamp)) {
+
 					m.current = item
 					trace.Items = append(trace.Items, item)
 				}
