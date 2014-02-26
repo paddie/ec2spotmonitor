@@ -1,6 +1,11 @@
 package ec2spotmonitor
 
-type InstanceFilter struct {
+import (
+	"fmt"
+	"github.com/titanous/goamz/ec2"
+)
+
+type Filter struct {
 	// t1.micro | m1.small | m1.medium |
 	// m1.large | m1.xlarge | m3.xlarge |
 	// m3.2xlarge | c1.medium | c1.xlarge |
@@ -22,24 +27,7 @@ type InstanceFilter struct {
 	Filter           *ec2.Filter
 }
 
-func oldInstanceFilter(instancetype, productdescription, availabilityzone string, filter map[string][]string) *InstanceFilter {
-
-	fil := ec2.NewFilter()
-	for k, v := range filter {
-		fil.Add(k, v...)
-	}
-
-	request := &InstanceFilter{
-		AvailabilityZone:   availabilityzone,
-		InstanceType:       instancetype,
-		ProductDescription: productdescription,
-		Filter:             fil,
-	}
-
-	return request
-}
-
-func NewInstanceFilter(instancetype, productdescription, availabilityzone string) (*InstanceFilter, error) {
+func NewFilter(instancetype, productdescription, availabilityzone string) (*Filter, error) {
 
 	if instancetype == "" ||
 		productdescription == "" ||
@@ -48,15 +36,9 @@ func NewInstanceFilter(instancetype, productdescription, availabilityzone string
     InstanceType:       '%s'
     ProductDescription: '%s'
     AvailabilityZone:   '%s'`, instancetype, productdescription, availabilityzone)
-
 	}
 
-	// fil := ec2.NewFilter()
-	// for k, v := range filter {
-	//  fil.Add(k, v...)
-	// }
-
-	request := &InstanceFilter{
+	request := &Filter{
 		AvailabilityZone:   availabilityzone,
 		InstanceType:       instancetype,
 		ProductDescription: productdescription,
@@ -65,3 +47,29 @@ func NewInstanceFilter(instancetype, productdescription, availabilityzone string
 
 	return request, nil
 }
+
+func (f *Filter) IsValid() bool {
+	if f.InstanceType == "" ||
+		f.ProductDescription == "" ||
+		f.AvailabilityZone == "" {
+		return false
+	}
+	return true
+}
+
+// func oldInstanceFilter(instancetype, productdescription, availabilityzone string, filter map[string][]string) *InstanceFilter {
+
+// 	fil := ec2.NewFilter()
+// 	for k, v := range filter {
+// 		fil.Add(k, v...)
+// 	}
+
+// 	request := &InstanceFilter{
+// 		AvailabilityZone:   availabilityzone,
+// 		InstanceType:       instancetype,
+// 		ProductDescription: productdescription,
+// 		Filter:             fil,
+// 	}
+
+// 	return request
+// }

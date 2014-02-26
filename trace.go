@@ -1,34 +1,34 @@
 package ec2spotmonitor
 
 import (
-	"errors"
+	// "errors"
 	"fmt"
 	"github.com/titanous/goamz/ec2"
 	"time"
 )
 
-type RegionTrace struct {
-	region        string                    // region name
-	instanceTypes map[string]*InstanceTrace // reference for all the instances
-}
+// type RegionTrace struct {
+// 	region        string                    // region name
+// 	instanceTypes map[string]*InstanceTrace // reference for all the instances
+// }
 
-func (self *RegionTrace) Add(item *ec2.SpotPriceItem) bool {
-	key := item.Key()
-	if _, ok := self.instanceTypes[key]; !ok {
-		// allocate for new instance
-		self.instanceTypes[key] = &InstanceTrace{
-			ID:                 key,
-			AvailabilityZone:   item.AvailabilityZone,
-			ProductDescription: item.ProductDescription,
-			InstanceType:       item.InstanceType,
-		}
-	}
+// func (self *RegionTrace) Add(item *ec2.SpotPriceItem) bool {
+// 	key := item.Key()
+// 	if _, ok := self.instanceTypes[key]; !ok {
+// 		// allocate for new instance
+// 		self.instanceTypes[key] = &InstanceTrace{
+// 			// Key:                key,
+// 			AvailabilityZone:   item.AvailabilityZone,
+// 			ProductDescription: item.ProductDescription,
+// 			InstanceType:       item.InstanceType,
+// 		}
+// 	}
 
-	return self.instanceTypes[key].addPoint(ec2.PricePoint{
-		DateTime: item.Timestamp,
-		Price:    item.SpotPrice,
-	})
-}
+// 	return self.instanceTypes[key].addPoint(ec2.PricePoint{
+// 		DateTime: item.Timestamp,
+// 		Price:    item.SpotPrice,
+// 	})
+// }
 
 type InstanceTrace struct {
 	Key                string
@@ -48,13 +48,12 @@ type PricePoint struct {
 func (t *InstanceTrace) addItem(item *ec2.SpotPriceItem) (bool, error) {
 
 	if item == nil {
-		return panic("Monitor.addPoint: <nil> item")
+		panic("Monitor.addPoint: <nil> item")
 	}
 
 	if t.Key != item.Key() {
 		return false, fmt.Errorf("Monitor.addPoint: Non-specific filter. trace.key %s != %s", t.Key, item.Key())
 	}
-
 	point := &PricePoint{
 		Date:  item.Timestamp,
 		Price: item.SpotPrice,
@@ -69,8 +68,8 @@ func (t *InstanceTrace) addItem(item *ec2.SpotPriceItem) (bool, error) {
 
 	// add point only if it is newer than the latest value
 	if t.Current.Price == point.Price ||
-		point.Date.Before(t.Latest.Date) ||
-		point.Date.Equal(t.Latest.Date) {
+		point.Date.Before(t.Current.Date) ||
+		point.Date.Equal(t.Current.Date) {
 		return false, nil
 	}
 
