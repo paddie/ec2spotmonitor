@@ -81,22 +81,42 @@ func TestInvalidToFrom(t *testing.T) {
 	fmt.Println(err.Error())
 }
 
+func TestUnevenInterval(t *testing.T) {
+
+	items1, err := desc.GetHorizon(time.Now().AddDate(0, -1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	items2, err := desc.GetHorizon(time.Now().AddDate(0, -2, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// run backwards through the items
+	for i := 0; i < len(items1); i++ {
+
+		i1 := items1[i]
+		i2 := items2[i]
+
+		if i1.SpotPrice != i2.SpotPrice ||
+			!i1.Timestamp.Equal(i2.Timestamp) {
+			t.Errorf("%v: i1 %f != %f i2 %v",
+				i1.Timestamp, i1.SpotPrice, i2.SpotPrice, i2.Timestamp)
+		}
+	}
+}
+
 func TestHorizonRepeatability(t *testing.T) {
 
-	items1, err := desc.GetHorizon(time.Now().AddDate(0, -5, 0))
+	items1, err := desc.GetHorizon(time.Now().AddDate(0, -1, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	time.Sleep(time.Second * 2)
-
-	items2, err := desc.GetHorizon(time.Now().AddDate(0, -5, 0))
+	items2, err := desc.GetHorizon(time.Now().AddDate(0, -1, 0))
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	if len(items1) != len(items2) {
-		t.Fatal("Results are not of equal length")
 	}
 
 	for i := 0; i < len(items1); i++ {

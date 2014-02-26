@@ -108,7 +108,10 @@ func (m *Monitor) MonitorSelect() {
 			m.lastUpdated = to
 
 			// only send item if it is newer AND different
-			for _, item := range items {
+			for i := len(items) - 1; i > 0; i-- {
+				item := items[i]
+				// }
+				// for _, item := range items {
 				if m.current == nil ||
 					(item.SpotPrice != m.current.SpotPrice &&
 						!item.Timestamp.After(m.current.Timestamp)) {
@@ -117,7 +120,6 @@ func (m *Monitor) MonitorSelect() {
 					trace.Items = append(trace.Items, item)
 				}
 			}
-
 			// note the processing time
 			trace.ProcessingTime = time.Now().Sub(now)
 			// return result asynchronously
