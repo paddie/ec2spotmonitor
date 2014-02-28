@@ -21,7 +21,7 @@ func TestMonitorInvalidDesc(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m, err := d.NewMonitor(time.Second * 1)
+	m, err := d.StartChangeMonitor(time.Second * 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestMonitor(t *testing.T) {
 
 	t.SkipNow()
 
-	m, err := desc.NewMonitor(time.Second * 1)
+	m, err := desc.StartUpdateMonitor(time.Second * 1)
 
 	// m, err := NewMonitor(auth, aws.EUWest, filter, time.Second*2)
 	if err != nil {

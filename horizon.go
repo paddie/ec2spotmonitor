@@ -57,7 +57,7 @@ func (s *EC2InstanceDesc) GetPriceHistory(from, to time.Time) ([]*ec2.SpotPriceI
 	r.StartTime = from
 	r.EndTime = to
 
-	return getSpotPriceItems(s.ec2, &r)
+	return getSpotPriceHistory(s.ec2, &r)
 }
 
 func (s *EC2InstanceDesc) GetHorizon(from time.Time) ([]*ec2.SpotPriceItem, error) {
@@ -81,7 +81,7 @@ func (s *EC2InstanceDesc) GetHorizon(from time.Time) ([]*ec2.SpotPriceItem, erro
 	r.StartTime = from
 	r.EndTime = to
 
-	return getSpotPriceItems(s.ec2, &r)
+	return getSpotPriceHistory(s.ec2, &r)
 }
 
 func getSpotPriceHistory(ec2 *ec2.EC2, r *ec2.SpotPriceRequest) ([]*ec2.SpotPriceItem, error) {

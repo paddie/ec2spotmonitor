@@ -17,24 +17,19 @@ type Monitor struct {
 	current     *ec2.SpotPriceItem    // last value that was changed the
 }
 
-func (s *EC2InstanceDesc) NewMonitor(interval time.Duration) (*Monitor, error) {
+func (s *EC2InstanceDesc) newMonitor(interval time.Duration) (*Monitor, error) {
 
 	if interval < time.Second {
 		return nil, fmt.Errorf("Monitor: Too small update interval (1 > %d)", interval)
 	}
 
 	m := &Monitor{
-		s:        s.ec2,
-		request:  s.request,
-		quitChan: make(chan bool),
-		// lock:      make(chan chan bool),
+		s:         s.ec2,
+		request:   s.request,
+		quitChan:  make(chan bool),
 		TraceChan: make(chan *Trace),
-		// horizon:   make(chan *HorizonRequest),
-		ticker: time.NewTicker(interval),
-		// active: true,
+		ticker:    time.NewTicker(interval),
 	}
-
-	go m.MonitorSelect()
 
 	return m, nil
 }
@@ -53,6 +48,30 @@ func (t *Trace) Error() string {
 	return t.err.Error()
 }
 
+func (s *EC2InstanceDesc) StartUpdateMonitor(interval time.Duration) (*Monitor, error) {
+
+	m, err := s.newMonitor(interval)
+	if err != nil {
+		return nil, err
+	}
+
+	go m.UpdateMonitor()
+
+	return m, nil
+}
+
+func (s *EC2InstanceDesc) StartChangeMonitor(interval time.Duration) (*Monitor, error) {
+
+	m, err := s.newMonitor(interval)
+	if err != nil {
+		return nil, err
+	}
+
+	go m.ChangeMonitor()
+
+	return m, nil
+}
+
 // Blocking Shutdown of the Monitor
 func (m *Monitor) Quit() {
 	if m == nil {
@@ -63,7 +82,8 @@ func (m *Monitor) Quit() {
 	<-m.quitChan
 }
 
-func (m *Monitor) MonitorSelect() {
+// Only sends prices when they
+func (m *Monitor) ChangeMonitor() {
 	for {
 		select {
 		case <-m.quitChan:
@@ -112,6 +132,69 @@ func (m *Monitor) MonitorSelect() {
 				if m.current == nil ||
 					(item.SpotPrice != m.current.SpotPrice &&
 						!item.Timestamp.After(m.current.Timestamp)) {
+
+					m.current = item
+					trace.Items = append(trace.Items, item)
+				}
+			}
+			// note the processing time - because.. statistics
+			trace.ProcessingTime = time.Now().Sub(now)
+			// return result asynchronously
+			m.TraceChan <- trace
+		}
+	}
+}
+
+// Sends price point updates every time there is an update
+// - even if that price is the same as the previous price
+func (m *Monitor) UpdateMonitor() {
+	for {
+		select {
+		case <-m.quitChan:
+			// stop ticker
+			m.ticker.Stop()
+			// close trace channel
+			close(m.TraceChan)
+			// send signal that cleanup is complete
+			m.quitChan <- true
+			return
+
+		case to := <-m.ticker.C:
+			// A tick was received from the ticker
+			// record current time to measure processing time
+			now := time.Now()
+			// use first tick to initialize the
+			if m.lastUpdated.IsZero() {
+				m.lastUpdated = to
+				continue
+			}
+			// init the response trace
+			trace := &Trace{
+				From: m.lastUpdated,
+				To:   to,
+			}
+
+			// copy the request object
+			r := *m.request
+			r.StartTime = m.lastUpdated
+			r.EndTime = to
+
+			// retrieve interformation
+			items, err := getSpotPriceHistory(m.s, &r)
+			// add error, even if nil
+			trace.err = err
+
+			// Update lastUpdated on a successfull
+			// describehistory
+			m.lastUpdated = to
+
+			// only send item if it is newer AND different price
+			// - spot prices arrive from new -> old
+			//   so we reverse iterate through them
+			for i := len(items) - 1; i > 0; i-- {
+				item := items[i]
+				if m.current == nil ||
+					!item.Timestamp.After(m.current.Timestamp) {
 
 					m.current = item
 					trace.Items = append(trace.Items, item)
