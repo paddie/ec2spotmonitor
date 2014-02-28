@@ -84,7 +84,7 @@ func (s *EC2InstanceDesc) GetHorizon(from time.Time) ([]*ec2.SpotPriceItem, erro
 	return getSpotPriceItems(s.ec2, &r)
 }
 
-func getSpotPriceItems(ec2 *ec2.EC2, r *ec2.SpotPriceRequest) ([]*ec2.SpotPriceItem, error) {
+func getSpotPriceHistory(ec2 *ec2.EC2, r *ec2.SpotPriceRequest) ([]*ec2.SpotPriceItem, error) {
 	items, err := ec2.SpotPriceHistory(r, nil)
 	if err != nil {
 		return nil, err

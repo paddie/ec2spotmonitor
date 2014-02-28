@@ -8,14 +8,13 @@ import (
 )
 
 type Monitor struct {
-	s           *ec2.EC2 // ec2 server credentials
-	request     *ec2.SpotPriceRequest
-	lastUpdated time.Time   // time of last update
-	TraceChan   chan *Trace // New pricepoints are sent on this channel
-	// quitChan    chan chan bool // for shutting down
-	quitChan chan bool
-	ticker   *time.Ticker
-	current  *ec2.SpotPriceItem // last value that was changed the
+	s           *ec2.EC2              // ec2 server credentials
+	request     *ec2.SpotPriceRequest // base request
+	lastUpdated time.Time             // time of last update
+	TraceChan   chan *Trace           // channel for pricepoints
+	quitChan    chan bool             // channel to signal exit
+	ticker      *time.Ticker          // ticks every 'duration'
+	current     *ec2.SpotPriceItem    // last value that was changed the
 }
 
 func (s *EC2InstanceDesc) NewMonitor(interval time.Duration) (*Monitor, error) {
@@ -75,9 +74,7 @@ func (m *Monitor) MonitorSelect() {
 			// send signal that cleanup is complete
 			m.quitChan <- true
 			return
-		// used to lock the monitor object
-		// case resp := <-m.lock:
-		// 	resp <- true
+
 		case to := <-m.ticker.C:
 			// A tick was received from the ticker
 			// record current time to measure processing time
@@ -99,7 +96,7 @@ func (m *Monitor) MonitorSelect() {
 			r.EndTime = to
 
 			// retrieve interformation
-			items, err := getSpotPriceItems(m.s, &r)
+			items, err := getSpotPriceHistory(m.s, &r)
 			// add error, even if nil
 			trace.err = err
 
@@ -107,11 +104,11 @@ func (m *Monitor) MonitorSelect() {
 			// describehistory
 			m.lastUpdated = to
 
-			// only send item if it is newer AND different
+			// only send item if it is newer AND different price
+			// - spot prices arrive from new -> old
+			//   so we reverse iterate through them
 			for i := len(items) - 1; i > 0; i-- {
 				item := items[i]
-				// }
-				// for _, item := range items {
 				if m.current == nil ||
 					(item.SpotPrice != m.current.SpotPrice &&
 						!item.Timestamp.After(m.current.Timestamp)) {
@@ -120,7 +117,7 @@ func (m *Monitor) MonitorSelect() {
 					trace.Items = append(trace.Items, item)
 				}
 			}
-			// note the processing time
+			// note the processing time - because.. statistics
 			trace.ProcessingTime = time.Now().Sub(now)
 			// return result asynchronously
 			m.TraceChan <- trace

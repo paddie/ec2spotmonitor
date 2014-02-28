@@ -30,6 +30,8 @@ func init() {
 	}
 }
 
+// Make sure that we fail gracefully
+// on invalid arguments
 func TestInvalidDesc(t *testing.T) {
 	auth, err := aws.EnvAuth()
 	if err != nil {
@@ -44,11 +46,13 @@ func TestInvalidDesc(t *testing.T) {
 
 	_, err = d.GetHorizon(time.Now().AddDate(0, 0, -7))
 	if err == nil {
-		t.Fatal("succeeded in checking with invalid parameters")
+		t.Fatal("invalid parameters acepted")
 	}
-	fmt.Println(err)
 }
 
+// Make sure that no empty arguments are accepted.
+// TODO: make sure that the parameters
+// do not contains wild-cards '*'
 func TestEmptyDesc(t *testing.T) {
 	auth, err := aws.EnvAuth()
 	if err != nil {
@@ -58,29 +62,31 @@ func TestEmptyDesc(t *testing.T) {
 
 	_, err = NewEC2InstanceDesc(s, "", "", "")
 	if err == nil {
-		t.Fatal("Accepting blank arrguments")
+		t.Fatal("Blank arguments accepted")
 	}
-	fmt.Println(err)
-
 }
 
+// Make sure that we do not accept dates
+// that are more than 6 months apart.
 func TestInvalidToFrom(t *testing.T) {
 
 	now := time.Now()
 
 	_, err := desc.GetPriceHistory(now.AddDate(0, -7, 0), now)
 	if err == nil {
-		t.Error("Accepting too big an horizon: -7 months")
+		t.Error("Accepted to-from > 6 months")
 	}
 	fmt.Println(err.Error())
 
 	_, err = desc.GetHorizon(time.Now().AddDate(0, -7, 0))
 	if err == nil {
-		t.Error("Accepting too big an horizon: -7 months")
+		t.Error("Accepted horizon > 6 months")
 	}
-	fmt.Println(err.Error())
 }
 
+// Make sure that no values are filtered out
+// if we set different horizons
+// - from start to finish, they should be equal
 func TestUnevenInterval(t *testing.T) {
 
 	items1, err := desc.GetHorizon(time.Now().AddDate(0, -1, 0))
@@ -107,6 +113,8 @@ func TestUnevenInterval(t *testing.T) {
 	}
 }
 
+// Make sure that two consequtive calls
+// produce equal results
 func TestHorizonRepeatability(t *testing.T) {
 
 	items1, err := desc.GetHorizon(time.Now().AddDate(0, -1, 0))

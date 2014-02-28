@@ -30,13 +30,16 @@ func TestMonitorInvalidDesc(t *testing.T) {
 	go func() {
 		for trace := range m.TraceChan {
 			if trace.err == nil {
-				t.Error("Monitor didn't fail on invalid description")
+				t.Error("Monitor didn't fail on invalid arguments")
 			}
+			// only run once
 			fmt.Println(trace.err.Error())
 			quit <- true
 		}
 	}()
+	// wait for the error to return after a tick
 	<-quit
+	// exit the monitor
 	m.Quit()
 }
 
