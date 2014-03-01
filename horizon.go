@@ -48,8 +48,8 @@ func (s *EC2InstanceDesc) GetPriceHistory(from, to time.Time) ([]*ec2.SpotPriceI
 		return nil, fmt.Errorf("From-date '%v' is before to-date '%v'", from, to)
 	}
 	// if the difference is more than one month
-	if to.Sub(from) > time.Since(time.Now().AddDate(0, -6, 0)) {
-		return nil, fmt.Errorf("to and from difference exceeding 6 month limit")
+	if to.Sub(from) > time.Since(time.Now().AddDate(0, -3, 0)) {
+		return nil, fmt.Errorf("to and from difference exceeds 3 month limit")
 	}
 
 	r := *s.request
@@ -72,8 +72,9 @@ func (s *EC2InstanceDesc) GetHorizon(from time.Time) ([]*ec2.SpotPriceItem, erro
 		return nil, fmt.Errorf("From-date '%v' is before to-date '%v'", from, to)
 	}
 	// if the difference is more than one month
-	if from.Before(time.Now().AddDate(0, -6, 0)) {
-		return nil, fmt.Errorf("horizon more than 6 months ago")
+	now := time.Now()
+	if from.Before(now.AddDate(0, -3, 0)) {
+		return nil, fmt.Errorf("from-date exceeds the 3 month limit")
 	}
 
 	r := *s.request
