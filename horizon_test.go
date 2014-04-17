@@ -2,8 +2,8 @@ package ec2spotmonitor
 
 import (
 	"fmt"
-	"github.com/titanous/goamz/aws"
-	"github.com/titanous/goamz/ec2"
+	"github.com/paddie/goamz/aws"
+	"github.com/paddie/goamz/ec2"
 	"runtime"
 	"testing"
 	"time"

@@ -3,18 +3,19 @@ package ec2spotmonitor
 import (
 	"fmt"
 	// "github.com/titanous/goamz/aws"
-	"github.com/titanous/goamz/ec2"
+	"github.com/paddie/goamz/ec2"
 	"time"
 )
 
 type Monitor struct {
 	s           *ec2.EC2              // ec2 server credentials
 	request     *ec2.SpotPriceRequest // base request
-	lastUpdated time.Time             // time of last update
-	TraceChan   chan *Trace           // channel for pricepoints
-	quitChan    chan bool             // channel to signal exit
-	ticker      *time.Ticker          // ticks every 'duration'
-	current     *ec2.SpotPriceItem    // last value that was changed the
+	filter      *ec2.Filter
+	lastUpdated time.Time          // time of last update
+	TraceChan   chan *Trace        // channel for pricepoints
+	quitChan    chan bool          // channel to signal exit
+	ticker      *time.Ticker       // ticks every 'duration'
+	current     *ec2.SpotPriceItem // last value that was changed the
 }
 
 func (s *EC2InstanceDesc) newMonitor(interval time.Duration) (*Monitor, error) {
@@ -25,6 +26,7 @@ func (s *EC2InstanceDesc) newMonitor(interval time.Duration) (*Monitor, error) {
 
 	m := &Monitor{
 		s:         s.ec2,
+		filter:    s.filter,
 		request:   s.request,
 		quitChan:  make(chan bool),
 		TraceChan: make(chan *Trace),
@@ -116,7 +118,7 @@ func (m *Monitor) ChangeMonitor() {
 			r.EndTime = to
 
 			// retrieve interformation
-			items, err := getSpotPriceHistory(m.s, &r)
+			items, err := getSpotPriceHistory(m.s, &r, m.filter)
 			// add error, even if nil
 			trace.err = err
 
@@ -180,7 +182,7 @@ func (m *Monitor) UpdateMonitor() {
 			r.EndTime = to
 
 			// retrieve interformation
-			items, err := getSpotPriceHistory(m.s, &r)
+			items, err := getSpotPriceHistory(m.s, &r, m.filter)
 			// add error, even if nil
 			trace.err = err
 
